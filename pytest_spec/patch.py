@@ -5,6 +5,8 @@
 import os
 import re
 
+from _pytest.reports import TestReport
+
 
 def pytest_runtest_logstart(self, nodeid, location):
     """Signal the start of running a single test item.
@@ -20,7 +22,7 @@ def pytest_collection_modifyitems(session, config, items):
         return f.listchain()[1].name
 
     def get_nodeid(f):
-        return "::".join(f.nodeid.split('::')[:-1])
+        return "::".join(f.nodeid.split("::")[:-1])
 
     items.sort(key=get_nodeid)
     items.sort(key=get_module_name)
@@ -39,7 +41,28 @@ def get_report_scopes(report):
     >>> get_report_scopes(report)
     ['describe_a_user', 'describe_email_address']
     """
-    return [i for i in report.nodeid.split('::')[1:-1] if i != '()']
+    return [i for i in report.nodeid.split("::")[1:-1] if i != "()"]
+
+
+def pytest_runtest_makereport(self, item, call):
+    """Get test parameters descriptions."""
+
+    param_descriptions = []
+
+    if hasattr(item, "callspec"):
+        parametrize_markers = item.iter_markers(name="parametrize")
+        for parametrize_marker in parametrize_markers:
+            ids_function = parametrize_marker.kwargs.get("ids")
+            if callable(ids_function):
+                for param_name, param_value in item.callspec.params.items():
+                    if param_name in parametrize_marker.args[0]:
+                        param_description = ids_function(param_value)
+                        param_descriptions.append(param_description)
+
+    report = TestReport.from_item_and_call(item, call)
+    report.user_properties = [("params", param_descriptions)]
+
+    return report
 
 
 def pytest_runtest_logreport(self, report):
@@ -50,20 +73,20 @@ def pytest_runtest_logreport(self, report):
     Hook changed to define SPECIFICATION like output format. This hook will
     overwrite also VERBOSE option.
     """
-    self.previous_scopes = getattr(self, 'previous_scopes', [])
+    self.previous_scopes = getattr(self, "previous_scopes", [])
     self.current_scopes = get_report_scopes(report)
-    indent = self.config.getini('spec_indent')
+    indent = self.config.getini("spec_indent")
 
     res = self.config.hook.pytest_report_teststatus(report=report, config=self.config)
     cat, letter, word = res
     self.stats.setdefault(cat, []).append(report)
-    if _is_ignored(report.nodeid, self.config.getini('spec_ignore').split(',')):
+    if _is_ignored(report.nodeid, self.config.getini("spec_ignore").split(",")):
         return
     if not letter and not word:
         return
     if not _is_nodeid_has_test(report.nodeid):
         return
-    test_path = _get_test_path(report.nodeid, self.config.getini('spec_header_format'))
+    test_path = _get_test_path(report.nodeid, self.config.getini("spec_header_format"))
     if test_path != self.currentfspath:
         self.currentfspath = test_path
         _print_description(self)
@@ -80,10 +103,18 @@ def pytest_runtest_logreport(self, report):
 
     if not isinstance(word, tuple):
         test_name = _get_test_name(report.nodeid)
-        docstring_summary = getattr(report, 'docstring_summary', '')
+        docstring_summary = getattr(report, "docstring_summary", "")
         docstring_summary = docstring_summary if docstring_summary else test_name
         markup, test_status = _format_results(report, self.config)
         depth = len(self.current_scopes) or 1
+
+        if report.user_properties:
+            params = dict(report.user_properties).get("params", [])
+
+            if params:
+                params_description = "; ".join(params)
+                docstring_summary = f"{docstring_summary}[{params_description}]"
+
         _print_test_result(self, test_name, docstring_summary, test_status, markup, depth)
 
 
@@ -102,10 +133,7 @@ def _is_nodeid_has_test(nodeid):
 
 
 def prettify(string):
-    return _capitalize_first_letter(
-        _replace_underscores(
-            _remove_test_container_prefix(
-                _remove_file_extension(string))))
+    return _capitalize_first_letter(_replace_underscores(_remove_test_container_prefix(_remove_file_extension(string))))
 
 
 def prettify_test(string):
@@ -126,22 +154,18 @@ def _get_test_path(nodeid, header):
         class_name = levels[1]
         test_case = prettify(class_name)
     else:
-        class_name = ''
+        class_name = ""
         test_case = prettify(module_name)
 
     return header.format(
-        path=levels[0],
-        module_name=module_name,
-        module_path=module_path,
-        class_name=class_name,
-        test_case=test_case
+        path=levels[0], module_name=module_name, module_path=module_path, class_name=class_name, test_case=test_case
     )
 
 
 def _print_description(self, msg=None):
     if msg is None:
         msg = self.currentfspath
-    if hasattr(self, '_first_triggered'):
+    if hasattr(self, "_first_triggered"):
         self._tw.line()
     self._tw.line()
     self._tw.write(msg)
@@ -178,31 +202,33 @@ def _append_colon(string):
 
 def _get_test_name(nodeid):
     test_name = prettify_test(_remove_module_name(nodeid))
-    if test_name[:1] == ' ':
-        test_name_parts = test_name.split('  ')
+    if test_name[:1] == " ":
+        test_name_parts = test_name.split("  ")
         if len(test_name_parts) == 1:
             return test_name.strip().capitalize()
-        return 'The ({}) {}'.format(test_name_parts[0][1:].replace(' ', '_'), test_name_parts[1])
+        return "The ({}) {}".format(test_name_parts[0][1:].replace(" ", "_"), test_name_parts[1])
     return test_name
 
 
 def _format_results(report, config):
-    success_indicator = config.getini('spec_success_indicator')
-    failure_indicator = config.getini('spec_failure_indicator')
-    skipped_indicator = config.getini('spec_skipped_indicator')
+    success_indicator = config.getini("spec_success_indicator")
+    failure_indicator = config.getini("spec_failure_indicator")
+    skipped_indicator = config.getini("spec_skipped_indicator")
     if report.passed:
-        return {'green': True}, success_indicator
+        return {"green": True}, success_indicator
     elif report.failed:
-        return {'red': True}, failure_indicator
+        return {"red": True}, failure_indicator
     elif report.skipped:
-        return {'yellow': True}, skipped_indicator
+        return {"yellow": True}, skipped_indicator
 
 
 def _print_test_result(self, test_name, docstring_summary, test_status, markup, depth):
-    indent = self.config.getini('spec_indent')
+    indent = self.config.getini("spec_indent")
     self._tw.line()
     self._tw.write(
-        indent * depth + self.config.getini('spec_test_format').format(
+        indent * depth
+        + self.config.getini("spec_test_format").format(
             result=test_status, name=test_name, docstring_summary=docstring_summary
-        ), **markup
+        ),
+        **markup,
     )
